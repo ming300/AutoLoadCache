@@ -1,21 +1,22 @@
 package com.jarvis.cache.to;
 
-import java.io.Serializable;
-
 import com.jarvis.cache.annotation.Cache;
 import com.jarvis.cache.aop.CacheAopProxyChain;
 
+import java.io.Serializable;
+
 /**
  * 用于处理自动加载数据到缓存
+ *
  * @author jiayu.qiu
  */
 public class AutoLoadTO implements Serializable {
 
-    private static final long serialVersionUID=1L;
+    private static final long serialVersionUID = 1L;
 
     private final CacheAopProxyChain joinPoint;
 
-    private final Object args[];
+    private final Object[] args;
 
     /**
      * 缓存注解
@@ -35,41 +36,41 @@ public class AutoLoadTO implements Serializable {
     /**
      * 上次从DAO加载数据时间
      */
-    private long lastLoadTime=0L;
+    private long lastLoadTime = 0L;
 
     /**
      * 上次请求数据时间
      */
-    private long lastRequestTime=0L;
+    private long lastRequestTime = 0L;
 
     /**
      * 第一次请求数据时间
      */
-    private long firstRequestTime=0L;
+    private long firstRequestTime = 0L;
 
     /**
      * 请求数据次数
      */
-    private long requestTimes=0L;
+    private long requestTimes = 0L;
 
-    private volatile boolean loading=false;
+    private volatile boolean loading = false;
 
     /**
      * 加载次数
      */
-    private long loadCnt=0L;
+    private long loadCnt = 0L;
 
     /**
      * 从DAO中加载数据，使用时间的总和
      */
-    private long useTotalTime=0L;
+    private long useTotalTime = 0L;
 
     public AutoLoadTO(CacheKeyTO cacheKey, CacheAopProxyChain joinPoint, Object args[], Cache cache, int expire) {
-        this.cacheKey=cacheKey;
-        this.joinPoint=joinPoint;
-        this.args=args;
-        this.cache=cache;
-        this.expire=expire;
+        this.cacheKey = cacheKey;
+        this.joinPoint = joinPoint;
+        this.args = args;
+        this.cache = cache;
+        this.expire = expire;
     }
 
     public CacheAopProxyChain getJoinPoint() {
@@ -81,10 +82,10 @@ public class AutoLoadTO implements Serializable {
     }
 
     public AutoLoadTO setLastRequestTime(long lastRequestTime) {
-        synchronized(this) {
-            this.lastRequestTime=lastRequestTime;
-            if(firstRequestTime == 0) {
-                firstRequestTime=lastRequestTime;
+        synchronized (this) {
+            this.lastRequestTime = lastRequestTime;
+            if (firstRequestTime == 0) {
+                firstRequestTime = lastRequestTime;
             }
             requestTimes++;
         }
@@ -112,9 +113,7 @@ public class AutoLoadTO implements Serializable {
      * @return this
      */
     public AutoLoadTO setLastLoadTime(long lastLoadTime) {
-        if(lastLoadTime > this.lastLoadTime) {
-            this.lastLoadTime=lastLoadTime;
-        }
+        this.lastLoadTime = lastLoadTime;
         return this;
     }
 
@@ -127,11 +126,11 @@ public class AutoLoadTO implements Serializable {
     }
 
     /**
-     * @param loading
+     * @param loading 是否正在加载
      * @return this
      */
     public AutoLoadTO setLoading(boolean loading) {
-        this.loading=loading;
+        this.loading = loading;
         return this;
     }
 
@@ -149,23 +148,25 @@ public class AutoLoadTO implements Serializable {
 
     /**
      * 记录用时
+     *
      * @param useTime 用时
      * @return this
      */
     public AutoLoadTO addUseTotalTime(long useTime) {
-        synchronized(this) {
+        synchronized (this) {
             this.loadCnt++;
-            this.useTotalTime+=useTotalTime;
+            this.useTotalTime += useTime;
         }
         return this;
     }
 
     /**
      * 平均用时
+     *
      * @return long 用时
      */
     public long getAverageUseTime() {
-        if(loadCnt == 0) {
+        if (loadCnt == 0) {
             return 0;
         }
         return this.useTotalTime / this.loadCnt;
@@ -177,11 +178,20 @@ public class AutoLoadTO implements Serializable {
 
     /**
      * @param expire expire
-     * @return @return this
+     * @return this
      */
     public AutoLoadTO setExpire(int expire) {
-        this.expire=expire;
+        this.expire = expire;
         return this;
+    }
+
+    public void flushRequestTime(CacheWrapper<Object> cacheWrapper) {
+        // 同步最后加载时间
+        this.setLastRequestTime(System.currentTimeMillis())
+                // 同步加载时间
+                .setLastLoadTime(cacheWrapper.getLastLoadTime())
+                // 同步过期时间
+                .setExpire(cacheWrapper.getExpire());
     }
 
 }

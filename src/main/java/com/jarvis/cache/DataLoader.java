@@ -1,193 +1,276 @@
 package com.jarvis.cache;
 
-import org.apache.log4j.Logger;
-
 import com.jarvis.cache.annotation.Cache;
 import com.jarvis.cache.aop.CacheAopProxyChain;
+import com.jarvis.cache.exception.LoadDataTimeOutException;
+import com.jarvis.cache.lock.ILock;
 import com.jarvis.cache.to.AutoLoadConfig;
 import com.jarvis.cache.to.AutoLoadTO;
 import com.jarvis.cache.to.CacheKeyTO;
 import com.jarvis.cache.to.CacheWrapper;
 import com.jarvis.cache.to.ProcessingTO;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 数据加载器
+ *
  * @author jiayu.qiu
  */
+@Slf4j
 public class DataLoader {
 
-    private static final Logger logger=Logger.getLogger(DataLoader.class);
+    private CacheHandler cacheHandler;
 
-    private final AbstractCacheManager cacheManager;
+    private CacheAopProxyChain pjp;
 
-    private final CacheAopProxyChain pjp;
+    private CacheKeyTO cacheKey;
 
-    private final CacheKeyTO cacheKey;
+    private Cache cache;
 
-    private final Cache cache;
+    private Object[] arguments;
 
-    private final Object[] arguments;
+    private AutoLoadTO autoLoadTO;
 
-    private final AutoLoadTO autoLoadTO;
-
-    private boolean isFirst=true;
+    private boolean isFirst;
 
     private long loadDataUseTime;
 
     private CacheWrapper<Object> cacheWrapper;
 
-    public DataLoader(CacheAopProxyChain pjp, AutoLoadTO autoLoadTO, CacheKeyTO cacheKey, Cache cache, AbstractCacheManager cacheManager) {
-        this.pjp=pjp;
-        this.autoLoadTO=autoLoadTO;
-        this.cacheKey=cacheKey;
-        this.cache=cache;
-        this.cacheManager=cacheManager;
-        if(null == autoLoadTO) {// 用户请求
-            arguments=pjp.getArgs();
-        } else {// 来自AutoLoadHandler的请求
-            arguments=autoLoadTO.getArgs();
+    private int tryCnt = 0;
+
+    public DataLoader() {
+    }
+
+    public DataLoader init(CacheAopProxyChain pjp, AutoLoadTO autoLoadTO, CacheKeyTO cacheKey, Cache cache, CacheHandler cacheHandler) {
+        this.cacheHandler = cacheHandler;
+        this.pjp = pjp;
+        this.cacheKey = cacheKey;
+        this.cache = cache;
+        this.autoLoadTO = autoLoadTO;
+
+        if (null == autoLoadTO) {
+            // 用户请求
+            this.arguments = pjp.getArgs();
+        } else {
+            // 来自AutoLoadHandler的请求
+            this.arguments = autoLoadTO.getArgs();
         }
+        this.loadDataUseTime = 0;
+        this.tryCnt = 0;
+        return this;
     }
 
-    public DataLoader(CacheAopProxyChain pjp, CacheKeyTO cacheKey, Cache cache, AbstractCacheManager cacheManager, Object[] arguments) {
-        this.pjp=pjp;
-        this.cacheKey=cacheKey;
-        this.cache=cache;
-        this.cacheManager=cacheManager;
-        this.arguments=arguments;
-        this.autoLoadTO=null;
+    public DataLoader init(CacheAopProxyChain pjp, CacheKeyTO cacheKey, Cache cache, CacheHandler cacheHandler, Object[] arguments) {
+        this.cacheHandler = cacheHandler;
+        this.pjp = pjp;
+        this.cacheKey = cacheKey;
+        this.cache = cache;
+        this.autoLoadTO = null;
+        this.arguments = arguments;
+        this.loadDataUseTime = 0;
+        this.tryCnt = 0;
+        return this;
     }
 
-    public DataLoader(CacheAopProxyChain pjp, Cache cache, AbstractCacheManager cacheManager) {
-        this(pjp, null, null, cache, cacheManager);
+    public DataLoader init(CacheAopProxyChain pjp, Cache cache, CacheHandler cacheHandler) {
+        return init(pjp, null, null, cache, cacheHandler);
     }
 
-    public DataLoader(CacheAopProxyChain pjp, CacheKeyTO cacheKey, Cache cache, AbstractCacheManager cacheManager) {
-        this(pjp, null, cacheKey, cache, cacheManager);
+    public DataLoader init(CacheAopProxyChain pjp, CacheKeyTO cacheKey, Cache cache, CacheHandler cacheHandler) {
+        return init(pjp, null, cacheKey, cache, cacheHandler);
+    }
+
+    /**
+     * 重置数据，避免长期缓存，去除引用关系，好让GC回收引用对象
+     */
+    public void reset() {
+        this.cacheHandler = null;
+        this.pjp = null;
+        this.cacheKey = null;
+        this.cache = null;
+        this.autoLoadTO = null;
+        this.arguments = null;
+        this.cacheWrapper = null;
     }
 
     public DataLoader loadData() throws Throwable {
-        ProcessingTO isProcessing=cacheManager.processing.get(cacheKey);
-        ProcessingTO processingTO=null;
-        if(null == isProcessing) {
-            processingTO=new ProcessingTO();
-            ProcessingTO _isProcessing=cacheManager.processing.putIfAbsent(cacheKey, processingTO);// 为发减少数据层的并发，增加等待机制。
-            if(null != _isProcessing) {
-                isProcessing=_isProcessing;// 获取到第一个线程的ProcessingTO 的引用，保证所有请求都指向同一个引用
+        ProcessingTO processing = cacheHandler.processing.get(cacheKey);
+        if (null == processing) {
+            ProcessingTO newProcessing = new ProcessingTO();
+            // 为发减少数据层的并发，增加等待机制。
+            ProcessingTO firstProcessing = cacheHandler.processing.putIfAbsent(cacheKey, newProcessing);
+            // 当前并发中的第一个请求
+            if (null == firstProcessing) {
+                isFirst = true;
+                processing = newProcessing;
+            } else {
+                isFirst = false;
+                // 获取到第一个线程的ProcessingTO 的引用，保证所有请求都指向同一个引用
+                processing = firstProcessing;
             }
+        } else {
+            isFirst = false;
         }
-        Object lock=null;
-        String tname=Thread.currentThread().getName();
-        if(null == isProcessing) {// 当前并发中的第一个请求
-            isFirst=true;
-            lock=processingTO;
+        Object lock = processing;
+        String threadName = Thread.currentThread().getName();
+        if (isFirst) {
+            if (log.isTraceEnabled()) {
+                log.trace("{} first thread!", threadName);
+            }
             try {
-                logger.debug(tname + " first thread!");
-                Object result=getData();
-                buildCacheWrapper(result);
-                processingTO.setCache(cacheWrapper);// 本地缓存
-            } catch(Throwable e) {
-                processingTO.setError(e);
+                doFirstRequest(processing);
+            } catch (Throwable e) {
+                processing.setError(e);
                 throw e;
             } finally {
-                processingTO.setFirstFinished(true);
-                cacheManager.processing.remove(cacheKey);
-                synchronized(lock) {
+                processing.setFirstFinished(true);
+                cacheHandler.processing.remove(cacheKey);
+                synchronized (lock) {
                     lock.notifyAll();
                 }
             }
         } else {
-            isFirst=false;
-            lock=isProcessing;
-            long startWait=isProcessing.getStartTime();
-
-            do {// 等待
-                if(null == isProcessing) {
-                    break;
-                }
-                if(isProcessing.isFirstFinished()) {
-                    CacheWrapper<Object> _cacheWrapper=isProcessing.getCache();// 从本地缓存获取数据， 防止频繁去缓存服务器取数据，造成缓存服务器压力过大
-                    logger.debug(tname + " do FirstFinished" + " is null :" + (null == _cacheWrapper));
-                    if(null != _cacheWrapper) {
-                        cacheWrapper=_cacheWrapper;
-                        return this;
-                    }
-                    Throwable error=isProcessing.getError();
-                    if(null != error) {// 当DAO出错时，直接抛异常
-                        logger.debug(tname + " do error");
-                        throw error;
-                    }
-                    break;
-                } else {
-                    synchronized(lock) {
-                        logger.debug(tname + " do wait");
-                        try {
-                            lock.wait(50);// 如果要测试lock对象是否有效，wait时间去掉就可以
-                        } catch(InterruptedException ex) {
-                            logger.error(ex.getMessage(), ex);
-                        }
-                    }
-                }
-            } while(System.currentTimeMillis() - startWait < cache.waitTimeOut());
-            if(null == cacheWrapper) {
-                cacheWrapper=cacheManager.get(cacheKey, pjp.getMethod(), this.arguments);
-            }
-            try {
-                if(null == cacheWrapper) {
-                    Object result=getData();
-                    buildCacheWrapper(result);
-                }
-            } catch(Throwable e) {
-                throw e;
-            } finally {
-                synchronized(lock) {
-                    lock.notifyAll();
-                }
-            }
+            doWaitRequest(processing, lock);
         }
         return this;
+    }
+
+    private void doFirstRequest(ProcessingTO processingTO) throws Throwable {
+        ILock distributedLock = cacheHandler.getLock();
+        // 开启分布式锁
+        if (null != distributedLock && cache.lockExpire() > 0) {
+            String lockKey = cacheKey.getLockKey();
+            long startWait = processingTO.getStartTime();
+            do {
+                // 获得分布式锁
+                if (distributedLock.tryLock(lockKey, cache.lockExpire())) {
+                    try {
+                        getData();
+                    } finally {
+                        distributedLock.unlock(lockKey);
+                    }
+                    break;
+                }
+                int tryCnt = 10;
+                // 没有获得锁时，定时缓存尝试获取数据
+                for (int i = 0; i < tryCnt; i++) {
+                    cacheWrapper = cacheHandler.get(cacheKey, pjp.getMethod());
+                    if (null != cacheWrapper) {
+                        break;
+                    }
+                    Thread.sleep(20);
+                }
+                if (null != cacheWrapper) {
+                    break;
+                }
+            } while (System.currentTimeMillis() - startWait < cache.waitTimeOut());
+            if (null == cacheWrapper) {
+                throw new LoadDataTimeOutException("load data for key \"" + cacheKey.getCacheKey() + "\" timeout(" + cache.waitTimeOut() + " ms).");
+            }
+        } else {
+            getData();
+        }
+        // 本地缓存
+        processingTO.setCache(cacheWrapper);
+    }
+
+    private void doWaitRequest(ProcessingTO processing, Object lock) throws Throwable {
+        long startWait = processing.getStartTime();
+        String tname = Thread.currentThread().getName();
+        do {
+            // 等待
+            if (processing.isFirstFinished()) {
+                // 从本地内存获取数据，防止频繁去缓存服务器取数据，造成缓存服务器压力过大
+                CacheWrapper<Object> tmpcacheWrapper = processing.getCache();
+                if (log.isTraceEnabled()) {
+                    log.trace("{} do FirstFinished" + " is null :{}", tname, (null == tmpcacheWrapper));
+                }
+                if (null != tmpcacheWrapper) {
+                    cacheWrapper = tmpcacheWrapper;
+                    return;
+                }
+                Throwable error = processing.getError();
+                // 当DAO出错时，直接抛异常
+                if (null != error) {
+                    if (log.isTraceEnabled()) {
+                        log.trace("{} do error", tname);
+                    }
+                    throw error;
+                }
+                break;
+            } else {
+                synchronized (lock) {
+                    if (log.isTraceEnabled()) {
+                        log.trace("{} do wait", tname);
+                    }
+                    try {
+                        // 如果要测试lock对象是否有效，wait时间去掉就可以
+                        lock.wait(10);
+                    } catch (InterruptedException ex) {
+                        log.error(ex.getMessage(), ex);
+                    }
+                }
+            }
+        } while (System.currentTimeMillis() - startWait < cache.waitTimeOut());
+        if (null == cacheWrapper) {
+            cacheWrapper = cacheHandler.get(cacheKey, pjp.getMethod());
+        }
+        if (null == cacheWrapper) {
+            AutoLoadConfig config = cacheHandler.getAutoLoadConfig();
+            if (tryCnt < config.getLoadDataTryCnt()) {
+                tryCnt++;
+                loadData();
+            } else {
+                throw new LoadDataTimeOutException("cache for key \"" + cacheKey.getCacheKey() + "\" loaded " + tryCnt + " times.");
+            }
+        }
     }
 
     public boolean isFirst() {
         return isFirst;
     }
 
-    public Object getData() throws Throwable {
+    public DataLoader getData() throws Throwable {
         try {
-            if(null != autoLoadTO) {
+            if (null != autoLoadTO) {
                 autoLoadTO.setLoading(true);
             }
-            long loadDataStartTime=System.currentTimeMillis();
-            Object result=pjp.doProxyChain(arguments);
-            loadDataUseTime=System.currentTimeMillis() - loadDataStartTime;
-            AutoLoadConfig config=cacheManager.getAutoLoadHandler().getConfig();
-            if(config.isPrintSlowLog() && loadDataUseTime >= config.getSlowLoadTime()) {
-                String className=pjp.getTargetClass().getName();
-                logger.error(className + "." + pjp.getMethod().getName() + ", use time:" + loadDataUseTime + "ms");
+            long loadDataStartTime = System.currentTimeMillis();
+            Object result = pjp.doProxyChain(arguments);
+            loadDataUseTime = System.currentTimeMillis() - loadDataStartTime;
+            AutoLoadConfig config = cacheHandler.getAutoLoadConfig();
+            String className = pjp.getMethod().getDeclaringClass().getName();
+            if (config.isPrintSlowLog() && loadDataUseTime >= config.getSlowLoadTime()) {
+                log.warn("{}.{}, use time:{}ms", className, pjp.getMethod().getName(), loadDataUseTime);
             }
-            return result;
-        } catch(Throwable e) {
+            if (log.isDebugEnabled()) {
+                log.debug("{}.{}, result is null : {}", className, pjp.getMethod().getName(), null == result);
+            }
+            buildCacheWrapper(result);
+        } catch (Throwable e) {
             throw e;
         } finally {
-            if(null != autoLoadTO) {
+            if (null != autoLoadTO) {
                 autoLoadTO.setLoading(false);
             }
         }
-    }
-
-    public DataLoader buildCacheWrapper(Object result) {
-        int expire=cache.expire();
-        try {
-            expire=cacheManager.getScriptParser().getRealExpire(cache.expire(), cache.expireExpression(), arguments, result);
-        } catch(Exception e) {
-            logger.error(e.getMessage(), e);
-        }
-        cacheWrapper=new CacheWrapper<Object>(result, expire);
         return this;
     }
 
+    private void buildCacheWrapper(Object result) {
+        int expire = cache.expire();
+        try {
+            expire = cacheHandler.getScriptParser().getRealExpire(cache.expire(), cache.expireExpression(), arguments,
+                    result);
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+        }
+        cacheWrapper = new CacheWrapper<>(result, expire);
+    }
+
     public CacheWrapper<Object> getCacheWrapper() {
-        if(null == cacheWrapper) {
+        if (null == cacheWrapper) {
             throw new RuntimeException("run loadData() or buildCacheWrapper() please!");
         }
         return cacheWrapper;

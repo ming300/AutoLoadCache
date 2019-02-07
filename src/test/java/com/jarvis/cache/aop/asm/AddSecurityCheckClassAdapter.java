@@ -4,6 +4,9 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
+/**
+ * @author: jiayu.qiu
+ */
 public class AddSecurityCheckClassAdapter extends ClassVisitor implements Opcodes {
 
     private String enhancedSuperName;
@@ -11,7 +14,7 @@ public class AddSecurityCheckClassAdapter extends ClassVisitor implements Opcode
     public AddSecurityCheckClassAdapter(ClassVisitor cv) {
         // Responsechain 的下一个 ClassVisitor，这里我们将传入 ClassWriter，
         // 负责改写后代码的输出
-        super(ASM5, cv);
+        super(ASM6, cv);
     }
 
     @Override
@@ -28,10 +31,12 @@ public class AddSecurityCheckClassAdapter extends ClassVisitor implements Opcode
         MethodVisitor mv=cv.visitMethod(access, name, desc, signature, exceptions);
         MethodVisitor wrappedMv=mv;
         if(mv != null) {
-            if(name.equals("operation")) {
+            System.out.println("visitMethod:"+name);
+            if("operation".equals(name)) {
                 wrappedMv=new AddSecurityCheckMethodAdapter(mv);
-            } else if(name.equals("<init>")) {
+            } else if("<init>".equals(name)) {
                 wrappedMv=new ChangeToChildConstructorMethodAdapter(mv, enhancedSuperName, desc, access);
+                //return mv;
             }
         }
         return wrappedMv;

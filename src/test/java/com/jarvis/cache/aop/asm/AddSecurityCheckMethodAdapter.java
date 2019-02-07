@@ -3,10 +3,13 @@ package com.jarvis.cache.aop.asm;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
+/**
+ * @author: jiayu.qiu
+ */
 public class AddSecurityCheckMethodAdapter extends MethodVisitor implements Opcodes {
 
     public AddSecurityCheckMethodAdapter(MethodVisitor mv) {
-        super(ASM5, mv);
+        super(ASM6, mv);
     }
 
     // 此方法在访问方法的头部时被访问到，仅被访问一次

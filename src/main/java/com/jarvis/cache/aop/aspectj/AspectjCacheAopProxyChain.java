@@ -1,13 +1,15 @@
 package com.jarvis.cache.aop.aspectj;
 
-import java.lang.reflect.Method;
-
+import com.jarvis.cache.aop.CacheAopProxyChain;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.Signature;
 import org.aspectj.lang.reflect.MethodSignature;
 
-import com.jarvis.cache.aop.CacheAopProxyChain;
+import java.lang.reflect.Method;
 
+/**
+ * @author: jiayu.qiu
+ */
 public class AspectjCacheAopProxyChain implements CacheAopProxyChain {
 
     private final ProceedingJoinPoint jp;
@@ -15,7 +17,7 @@ public class AspectjCacheAopProxyChain implements CacheAopProxyChain {
     private Method method;
 
     public AspectjCacheAopProxyChain(ProceedingJoinPoint jp) {
-        this.jp=jp;
+        this.jp = jp;
 
     }
 
@@ -24,18 +26,17 @@ public class AspectjCacheAopProxyChain implements CacheAopProxyChain {
         return jp.getArgs();
     }
 
-    @SuppressWarnings("rawtypes")
     @Override
-    public Class getTargetClass() {
-        return jp.getTarget().getClass();
+    public Object getTarget() {
+        return jp.getTarget();
     }
 
     @Override
     public Method getMethod() {
-        if(null == method) {
-            Signature signature=jp.getSignature();
-            MethodSignature methodSignature=(MethodSignature)signature;
-            this.method=methodSignature.getMethod();
+        if (null == method) {
+            Signature signature = jp.getSignature();
+            MethodSignature methodSignature = (MethodSignature) signature;
+            this.method = methodSignature.getMethod();
         }
         return method;
     }

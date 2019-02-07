@@ -1,19 +1,21 @@
 package com.jarvis.cache.aop.aspectj;
 
-import java.lang.reflect.Method;
-
+import com.jarvis.cache.aop.DeleteCacheAopProxyChain;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.Signature;
 import org.aspectj.lang.reflect.MethodSignature;
 
-import com.jarvis.cache.aop.DeleteCacheAopProxyChain;
+import java.lang.reflect.Method;
 
+/**
+ * @author: jiayu.qiu
+ */
 public class AspectjDeleteCacheAopProxyChain implements DeleteCacheAopProxyChain {
 
     private JoinPoint jp;
 
     public AspectjDeleteCacheAopProxyChain(JoinPoint jp) {
-        this.jp=jp;
+        this.jp = jp;
     }
 
     @Override
@@ -21,16 +23,15 @@ public class AspectjDeleteCacheAopProxyChain implements DeleteCacheAopProxyChain
         return jp.getArgs();
     }
 
-    @SuppressWarnings("rawtypes")
     @Override
-    public Class getTargetClass() {
-        return jp.getTarget().getClass();
+    public Object getTarget() {
+        return jp.getTarget();
     }
 
     @Override
     public Method getMethod() {
-        Signature signature=jp.getSignature();
-        MethodSignature methodSignature=(MethodSignature)signature;
+        Signature signature = jp.getSignature();
+        MethodSignature methodSignature = (MethodSignature) signature;
         return methodSignature.getMethod();
     }
 
